@@ -17,9 +17,7 @@ async def db_start(pool):
     # ВНИМАНИЕ: Эти три строки удалят старые таблицы со старыми колонками.
     # Оставьте их для первого запуска бота, чтобы таблицы пересоздались правильно.
     # После успешного запуска бота ОБЯЗАТЕЛЬНО удалите эти три строки!
-    await conn.execute('DROP TABLE IF EXISTS users CASCADE;')
-    await conn.execute('DROP TABLE IF EXISTS inventory CASCADE;')
-    await conn.execute('DROP TABLE IF EXISTS fields CASCADE;')
+
 
     await conn.execute('''
   CREATE TABLE IF NOT EXISTS users (
