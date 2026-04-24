@@ -90,4 +90,4 @@ async def process_upgrade(call: types.CallbackQuery, pool):  # Добавили 
     await call.answer("🏘 Амбар расширен!", show_alert=True)
     # Вызываем функцию отображения амбара заново, передавая pool
     await cmd_barn(call.message, pool)
-git add .
+
