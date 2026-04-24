@@ -8,6 +8,7 @@ from database import create_pool, db_start
 from handlers.farm import router as farm_router
 from handlers.start import router as start_router
 from handlers.ambar import router as ambart_router
+from handlers.market import router as market_router
 
 # ================= НАСТРОЙКИ =================
 BOT_TOKEN = "8685862317:AAESwf50j_cQidI-UF9f1mL-fMu8AgZbnP8"
@@ -43,6 +44,7 @@ async def main():
   dp.include_router(farm_router)
   dp.include_router(start_router)
   dp.include_router(ambart_router)
+  dp.include_router(market_router)
 
   # 6. Запускаем
   await bot.delete_webhook(drop_pending_updates=True)
