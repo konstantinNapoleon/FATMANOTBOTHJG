@@ -18,6 +18,7 @@ def get_current_price(item_id):
 # 1. Функция отрисовки ГЛАВНОГО меню рынка
 async def get_market_ui(pool, user_id):
     items = await get_inventory(pool, user_id)
+    user_inventory = {record['item_name']: record['amount'] for record in items} if items else {}
 
     kb = InlineKeyboardBuilder()
     market_text = (
@@ -26,39 +27,38 @@ async def get_market_ui(pool, user_id):
         "🕒 Цены обновлены: *сейчас*\n\n"
     )
 
-    crops_found = False
-    if items:
-        for record in items:
-            item_id = record['item_name']
-            amount = record['amount']
-            item_data = ITEMS.get(item_id)
+    sell_buttons_added = False
 
-            if item_data and item_data.get("type") == "crop":
-                crops_found = True
-                price = get_current_price(item_id)
-                name = item_data['name']
-                emoji = item_data['emoji']
-                total_value = amount * price
+    for item_id, item_data in ITEMS.items():
+        if item_data.get("type") != "crop":
+            continue
 
-                market_text += (
-                    f"{emoji} **{name}**\n"
-                    f"├ Цена: `{price} 💷` за шт.\n"
-                    f"└ В амбаре: `{amount} шт.`\n"
-                    f"💰 Итого: **{total_value} 💷**\n\n"
-                )
-                kb.button(text=f"💰 Продать {name}", callback_data=f"sell_{item_id}_{price}")
+        price = get_current_price(item_id)
+        name = item_data["name"]
+        emoji = item_data["emoji"]
+        amount = user_inventory.get(item_id, 0)
+        total_value = amount * price
 
-    if not crops_found:
-        market_text += "❌ *В амбаре пусто...*\nПосейте что-нибудь на /field!\n\n"
+        market_text += (
+            f"{emoji} **{name}**\n"
+            f"├ Цена: `{price} 💷` за шт.\n"
+            f"└ В амбаре: `{amount} шт.`\n"
+            f"💰 Итого: **{total_value} 💷**\n\n"
+        )
+
+        if amount > 0:
+            sell_buttons_added = True
+            kb.button(text=f"💰 Продать {name}", callback_data=f"sell_{item_id}_{price}")
 
     market_text += "━━━━━━━━━━━━━━━━━━━━\n"
-    market_text += "⚒ *Удачного сбора урожая, фермер!*"
+    market_text += "⚒️ *Удачного сбора урожая, фермер!*"
 
-    # Кнопка перехода в Амбар
+    # Кнопка перехода в Амбар — всегда есть
     kb.button(text="🏘 Перейти в Амбар", callback_data="market_to_barn")
 
     kb.adjust(1)
     return market_text, kb.as_markup()
+
 
 
 # Команда /market
