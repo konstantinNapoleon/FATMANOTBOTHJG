@@ -4,30 +4,48 @@ from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from items import ITEMS
-from database import get_inventory, get_user
+from database import get_inventory
 
 router = Router()
 
 
 def get_current_price(item_id):
     seed = int(time.time() // 300)
-    random.seed(seed + hash(item_id))
+    stable = sum(ord(char) for char in item_id)
+    random.seed(seed + stable)
     return random.randint(20, 50)
 
 
-# 1. Функция отрисовки ГЛАВНОГО меню рынка
+def get_item_id_by_emoji(emoji: str):
+    for item_id, item_data in ITEMS.items():
+        if item_data.get("emoji") == emoji:
+            return item_id
+    return None
+
+
+def parse_sell_args(text: str):
+    parts = text.strip().split()
+    if len(parts) < 2:
+        return None, None
+
+    emoji = parts[1]
+    amount = None
+
+    if len(parts) >= 3:
+        amount = parts[2]
+
+    return emoji, amount
+
+
 async def get_market_ui(pool, user_id):
     items = await get_inventory(pool, user_id)
-    user_inventory = {record['item_name']: record['amount'] for record in items} if items else {}
+    user_inventory = {record["item_name"]: record["amount"] for record in items} if items else {}
 
-    kb = InlineKeyboardBuilder()
     market_text = (
-        "🚜 **ЛАВКА «ЗОЛОТАЯ НИВА»**\n"
+        "🚜 ЛАВКА «ЗОЛОТАЯ НИВА»\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🕒 Цены обновлены: *сейчас*\n\n"
+        "🕒 Цены обновлены: сейчас\n\n"
     )
-
-    sell_buttons_added = False
 
     for item_id, item_data in ITEMS.items():
         if item_data.get("type") != "crop":
@@ -40,144 +58,251 @@ async def get_market_ui(pool, user_id):
         total_value = amount * price
 
         market_text += (
-            f"{emoji} **{name}**\n"
-            f"├ Цена: `{price} 💷` за шт.\n"
-            f"└ В амбаре: `{amount} шт.`\n"
-            f"💰 Итого: **{total_value} 💷**\n\n"
+            f"{emoji} {name}\n"
+            f"├ Цена: {price} 💷 за шт.\n"
+            f"└ В амбаре: {amount} шт.\n"
+            f"💰 Итого: {total_value} 💷\n\n"
         )
 
-        if amount > 0:
-            sell_buttons_added = True
-            kb.button(text=f"💰 Продать {name}", callback_data=f"sell_{item_id}_{price}")
+    market_text += (
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "❗️Чтобы продать что-то пишите /sell [эмодзи] [кол-во]\n\n"
+        "❗️Чтобы продать все /sell [эмодзи]\n\n"
+        "⚒️ Удачного сбора урожая, фермер!"
+    )
 
-    market_text += "━━━━━━━━━━━━━━━━━━━━\n"
-    market_text += "⚒️ *Удачного сбора урожая, фермер!*"
-
-    # Кнопка перехода в Амбар — всегда есть
-    kb.button(text="🏘 Перейти в Амбар", callback_data="market_to_barn")
-
-    kb.adjust(1)
-    return market_text, kb.as_markup()
+    return market_text
 
 
-
-# Команда /market
 @router.message(Command("market"))
 async def cmd_market(message: types.Message, pool):
-    text, reply_markup = await get_market_ui(pool, message.from_user.id)
-    await message.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
+    text = await get_market_ui(pool, message.from_user.id)
+    await message.answer(text)
 
 
-# 2. Обработка продажи и показ "Чека"
-@router.callback_query(F.data.startswith("sell_"))
-async def process_sell(call: types.CallbackQuery, pool):
-    data = call.data.split("_")
-    item_id = data[1]
-    price_at_click = int(data[2])
-    user_id = call.from_user.id
+@router.message(Command("price"))
+async def cmd_price(message: types.Message):
+    parts = message.text.strip().split()
+
+    if len(parts) < 2:
+        await message.answer("❌ Использование: /price [эмодзи]")
+        return
+
+    emoji = parts[1]
+    item_id = get_item_id_by_emoji(emoji)
+
+    if not item_id:
+        await message.answer("❌ Не удалось распознать товар по эмодзи.")
+        return
+
+    item_data = ITEMS.get(item_id)
+    if item_data.get("type") != "crop":
+        await message.answer("❌ Для этого предмета биржа сегодня молчит.")
+        return
+
+    price = get_current_price(item_id)
+
+    await message.answer(
+        f"📈 Текущий курс:\n"
+        f"{item_data['emoji']} | {item_data['name']}\n"
+        f"Цена: {price} 💷 за шт."
+    )
+
+
+@router.message(Command("sell"))
+async def cmd_sell(message: types.Message, pool):
+    user_id = message.from_user.id
+    emoji, amount_raw = parse_sell_args(message.text)
+
+    if not emoji:
+        await message.answer("🌾 Укажите товар так: /sell [эмодзи] [кол-во]")
+        return
+
+    item_id = get_item_id_by_emoji(emoji)
+
+    if not item_id:
+        await message.answer("🧺 Я не нашёл такой товар на прилавке. Проверьте эмодзи из маркета.")
+        return
+
+    item_data = ITEMS.get(item_id)
+    if item_data.get("type") != "crop":
+        await message.answer("🚫 Этот предмет не принимается в лавке.")
+        return
+
     current_price = get_current_price(item_id)
 
-    if current_price != price_at_click:
-        await call.answer(f"⚠️ Курс изменился!", show_alert=True)
-        text, reply_markup = await get_market_ui(pool, user_id)
-        await call.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    async with pool.acquire() as conn:
+        res = await conn.fetchrow(
+            '''
+            SELECT item_name, amount
+            FROM inventory
+            WHERE user_id = $1 AND item_name = $2
+            ''',
+            user_id, item_id
+        )
+
+    if not res or res["amount"] <= 0:
+        await message.answer("🌫️ В амбаре такого товара сейчас нет.")
+        return
+
+    available_amount = res["amount"]
+
+    if amount_raw is None:
+        sell_amount = available_amount
+    else:
+        try:
+            sell_amount = int(amount_raw)
+        except ValueError:
+            await message.answer("🔢 Количество нужно указывать числом.")
+            return
+
+        if sell_amount <= 0:
+            await message.answer("⚖️ Нельзя продать ноль или меньше.")
+            return
+
+        if sell_amount > available_amount:
+            await message.answer(f"📦 У вас в амбаре только {available_amount} шт.")
+            return
+
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text="Да",
+        callback_data=f"sellcheck_yes:{item_id}:{sell_amount}:{current_price}"
+    )
+    kb.button(
+        text="Нет",
+        callback_data="sellcheck_no"
+    )
+    kb.adjust(2)
+
+    text = (
+        "🧾 Лавочник пересчитал мешки и уточняет:\n\n"
+        "Вы действительно хотите продать:\n"
+        f"{item_data['emoji']} {sell_amount} шт.\n"
+        f"по прайсу: {current_price}\n\n"
+        "Сказать торговцу продолжать?"
+    )
+
+    await message.answer(text, reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data == "sellcheck_no")
+async def sellcheck_no(call: types.CallbackQuery):
+    await call.message.edit_text("🛑 Торг был отменён!")
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sellcheck_yes:"))
+async def sellcheck_yes(call: types.CallbackQuery):
+    _, item_id, sell_amount, price = call.data.split(":")
+    sell_amount = int(sell_amount)
+    price = int(price)
+
+    item_data = ITEMS.get(item_id, {"emoji": "📦", "name": item_id})
+    total_profit = sell_amount * price
+
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text="Подтвердить",
+        callback_data=f"sellfinal_yes:{item_id}:{sell_amount}:{price}"
+    )
+    kb.button(
+        text="Отменить",
+        callback_data="sellfinal_no"
+    )
+    kb.adjust(2)
+
+    text = (
+        "💼 Сделка почти на столе:\n\n"
+        f"Вы продаете {item_data['emoji']} {sell_amount} шт.\n"
+        f"Итого: {total_profit}\n\n"
+        "Подтвердить окончательно?"
+    )
+
+    await call.message.edit_text(text, reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(F.data == "sellfinal_no")
+async def sellfinal_no(call: types.CallbackQuery):
+    await call.message.edit_text("📭 Продажа была отменена!")
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sellfinal_yes:"))
+async def sellfinal_yes(call: types.CallbackQuery, pool):
+    user_id = call.from_user.id
+    _, item_id, sell_amount, old_price = call.data.split(":")
+    sell_amount = int(sell_amount)
+    old_price = int(old_price)
+
+    item_data = ITEMS.get(item_id, {"emoji": "📦", "name": item_id})
+    current_price = get_current_price(item_id)
+
+    if current_price != old_price:
+        await call.message.edit_text(
+            "📈 Пока вы торговались, курс изменился.\nПопробуйте снова через /sell."
+        )
+        await call.answer()
         return
 
     async with pool.acquire() as conn:
-        res = await conn.fetchrow('''
-            SELECT item_name, amount FROM inventory 
+        res = await conn.fetchrow(
+            '''
+            SELECT amount
+            FROM inventory
             WHERE user_id = $1 AND item_name = $2
-        ''', user_id, item_id)
+            ''',
+            user_id, item_id
+        )
 
-        if not res or res['amount'] <= 0:
-            await call.answer("❌ В амбаре этого нет!", show_alert=True)
+        if not res or res["amount"] < sell_amount:
+            await call.message.edit_text(
+                "📦 В амбаре уже недостаточно товара для этой сделки."
+            )
+            await call.answer()
             return
 
-        db_item_name = res['item_name']
-        amount = res['amount']
-        total_profit = amount * current_price
+        total_profit = sell_amount * current_price
 
-        # Списываем предмет (обнуляем) и начисляем Фаркоины в одной транзакции
         async with conn.transaction():
-            await conn.execute('''
-                UPDATE inventory SET amount = 0 
-                WHERE user_id = $1 AND item_name = $2
-            ''', user_id, db_item_name)
+            await conn.execute(
+                '''
+                UPDATE inventory
+                SET amount = amount - $1
+                WHERE user_id = $2 AND item_name = $3
+                ''',
+                sell_amount, user_id, item_id
+            )
 
-            await conn.execute('''
-                INSERT INTO inventory (user_id, item_name, amount) 
-                VALUES ($1, 'Фаркоин', $2) 
-                ON CONFLICT(user_id, item_name) 
+            await conn.execute(
+                '''
+                DELETE FROM inventory
+                WHERE user_id = $1 AND item_name = $2 AND amount <= 0
+                ''',
+                user_id, item_id
+            )
+
+            await conn.execute(
+                '''
+                INSERT INTO inventory (user_id, item_name, amount)
+                VALUES ($1, 'Фаркоин', $2)
+                ON CONFLICT (user_id, item_name)
                 DO UPDATE SET amount = inventory.amount + $2
-            ''', user_id, total_profit)
+                ''',
+                user_id, total_profit
+            )
 
-    item_data = ITEMS.get(item_id, {"emoji": "📦", "name": item_id})
     success_text = (
-        "✅ **СДЕЛКА СОВЕРШЕНА!**\n"
+        "✅ СДЕЛКА СОВЕРШЕНА!\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"📦 Товар: {item_data['emoji']} **{item_data['name']}**\n"
-        f"⚖️ Объем: `{amount} шт.`\n"
-        f"📈 Курс: `{current_price} 💷/шт.`\n\n"
-        f"💰 Получено: **+{total_profit} 💷**\n"
+        f"📦 Товар: {item_data['emoji']} {item_data['name']}\n"
+        f"⚖️ Объем: {sell_amount} шт.\n"
+        f"📈 Курс: {current_price} 💷/шт.\n\n"
+        f"💰 Получено: +{total_profit} 💷\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "💵 Деньги доставлены в ваш амбар."
     )
 
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад в лавку", callback_data="market_back")
-    await call.message.edit_text(success_text, reply_markup=kb.as_markup(), parse_mode="Markdown")
-
-
-# 3. Обработка кнопки "Назад в лавку"
-@router.callback_query(F.data == "market_back")
-async def process_market_back(call: types.CallbackQuery, pool):
-    text, reply_markup = await get_market_ui(pool, call.from_user.id)
-    try:
-        await call.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-    except:
-        pass
-
-
-# 4. Переход в Амбар из Маркета
-@router.callback_query(F.data == "market_to_barn")
-async def process_go_to_barn(call: types.CallbackQuery, pool):
-    user_id = call.from_user.id
-
-    user = await get_user(pool, user_id)
-    items = await get_inventory(pool, user_id)
-
-    barn_level = user['barn_level'] if user else 1
-    balance = 0
-    inventory_list = []
-    usage = 0
-
-    if items:
-        for record in items:
-            name = record['item_name']
-            amount = record['amount']
-
-            if "Фаркоин" in name:
-                balance += amount
-                continue
-
-            item_data = ITEMS.get(name, {"emoji": "📦", "name": name})
-            usage += amount
-            inventory_list.append(f"{item_data['emoji']} | {item_data['name']} **{amount} шт.**")
-
-    capacity = barn_level * 100
-    inventory_text = "\n".join(inventory_list) if inventory_list else "💨 В амбаре пока пусто..."
-
-    text = (
-        f"🏘 **Ваш Амбар (Ур. {barn_level})**\n"
-        f"📈 Заполнено: `{usage} / {capacity}` ед.\n"
-        f"💰 В наличии: **{balance} 💷 Фаркоин**\n"
-        f"--------------------------\n"
-        f"{inventory_text}\n"
-        f"--------------------------\n"
-        f"🛍 _Вы перешли из лавки_"
-    )
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🛒 Вернуться в Лавку", callback_data="market_back")
-
-    await call.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
+    await call.message.edit_text(success_text)
+    await call.answer()
