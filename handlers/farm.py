@@ -85,23 +85,30 @@ async def process_plant(call: types.CallbackQuery, pool: Pool):
 
 @router.callback_query(F.data == "farm_harvest")
 async def process_harvest(call: types.CallbackQuery, pool: Pool):
-    user_id = call.from_user.id
+  user_id = call.from_user.id
 
-    # Узнаем что росло
-    f = await pool.fetchrow("SELECT plant_type FROM fields WHERE user_id=$1", user_id)
-    plant = f['plant_type'] if f else "Ничего"
+  # Узнаем, что росло
+  f = await pool.fetchrow("SELECT plant_type FROM fields WHERE user_id=$1", user_id)
+  plant = f['plant_type'] if f else "Ничего"
 
-    # Добавляем в инвентарь (10 штук). Синтаксис PostgreSQL для конфликтов немного отличается
-    await pool.execute("""
-        INSERT INTO inventory (user_id, item_name, amount) 
-        VALUES ($1, $2, 10) 
-        ON CONFLICT(user_id, item_name) DO UPDATE SET amount = inventory.amount + 10
-    """, user_id, plant)
+  # ЗАЩИТА: Если игрок нажал на старую кнопку, а поле уже пустое
+  if plant == 'Ничего':
+    await call.answer("🌱 На этой грядке пусто!", show_alert=True)
+    # Принудительно обновляем интерфейс, чтобы убрать старую кнопку
+    return await update_field_ui(call, pool)
 
-    # Очищаем поле
-    await pool.execute("UPDATE fields SET status='empty', plant_type='Ничего' WHERE user_id=$1", user_id)
-    await call.answer(f"Собрано 10 ед. {plant}!")
-    await update_field_ui(call, pool)
+  # Добавляем в инвентарь (10 штук).
+  await pool.execute("""
+    INSERT INTO inventory (user_id, item_name, amount) 
+    VALUES ($1, $2, 10) 
+    ON CONFLICT(user_id, item_name) DO UPDATE SET amount = inventory.amount + 10
+  """, user_id, plant)
+
+  # Очищаем поле
+  await pool.execute("UPDATE fields SET status='empty', plant_type='Ничего' WHERE user_id=$1", user_id)
+  await call.answer(f"Собрано 10 ед. {plant}!")
+  await update_field_ui(call, pool)
+
 
 
 @router.callback_query(F.data == "farm_refresh")
