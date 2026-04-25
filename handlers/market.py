@@ -4,7 +4,7 @@ from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from items import ITEMS
-from database import get_inventory
+from database import get_inventory, add_xp, update_last_action
 
 router = Router()
 
@@ -167,11 +167,11 @@ async def cmd_sell(message: types.Message, pool):
     kb = InlineKeyboardBuilder()
     kb.button(
         text="Да",
-        callback_data=f"sellcheck_yes:{item_id}:{sell_amount}:{current_price}"
+        callback_data=f"sellcheck_yes:{item_id}:{sell_amount}:{current_price}:{user_id}"
     )
     kb.button(
         text="Нет",
-        callback_data="sellcheck_no"
+        callback_data=f"sellcheck_no:{user_id}"
     )
     kb.adjust(2)
 
@@ -186,15 +186,27 @@ async def cmd_sell(message: types.Message, pool):
     await message.answer(text, reply_markup=kb.as_markup())
 
 
-@router.callback_query(F.data == "sellcheck_no")
+def is_owner(callback_data: str, user_id: int) -> bool:
+    return int(callback_data.split(":")[-1]) == user_id
+
+
+@router.callback_query(F.data.startswith("sellcheck_no:"))
 async def sellcheck_no(call: types.CallbackQuery):
+    if not is_owner(call.data, call.from_user.id):
+        await call.answer("Это не ваша сделка.", show_alert=True)
+        return
+
     await call.message.edit_text("🛑 Торг был отменён!")
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("sellcheck_yes:"))
 async def sellcheck_yes(call: types.CallbackQuery):
-    _, item_id, sell_amount, price = call.data.split(":")
+    if not is_owner(call.data, call.from_user.id):
+        await call.answer("Это не ваша сделка.", show_alert=True)
+        return
+
+    _, item_id, sell_amount, price, owner_id = call.data.split(":")
     sell_amount = int(sell_amount)
     price = int(price)
 
@@ -204,11 +216,11 @@ async def sellcheck_yes(call: types.CallbackQuery):
     kb = InlineKeyboardBuilder()
     kb.button(
         text="Подтвердить",
-        callback_data=f"sellfinal_yes:{item_id}:{sell_amount}:{price}"
+        callback_data=f"sellfinal_yes:{item_id}:{sell_amount}:{price}:{owner_id}"
     )
     kb.button(
         text="Отменить",
-        callback_data="sellfinal_no"
+        callback_data=f"sellfinal_no:{owner_id}"
     )
     kb.adjust(2)
 
@@ -223,16 +235,24 @@ async def sellcheck_yes(call: types.CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(F.data == "sellfinal_no")
+@router.callback_query(F.data.startswith("sellfinal_no:"))
 async def sellfinal_no(call: types.CallbackQuery):
+    if not is_owner(call.data, call.from_user.id):
+        await call.answer("Это не ваша сделка.", show_alert=True)
+        return
+
     await call.message.edit_text("📭 Продажа была отменена!")
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("sellfinal_yes:"))
 async def sellfinal_yes(call: types.CallbackQuery, pool):
+    if not is_owner(call.data, call.from_user.id):
+        await call.answer("Это не ваша сделка.", show_alert=True)
+        return
+
     user_id = call.from_user.id
-    _, item_id, sell_amount, old_price = call.data.split(":")
+    _, item_id, sell_amount, old_price, _owner_id = call.data.split(":")
     sell_amount = int(sell_amount)
     old_price = int(old_price)
 
@@ -293,6 +313,14 @@ async def sellfinal_yes(call: types.CallbackQuery, pool):
                 user_id, total_profit
             )
 
+    sold_xp = max(1, sell_amount // 5)
+    xp_result = await add_xp(pool, user_id, sold_xp)
+    await update_last_action(
+        pool,
+        user_id,
+        f"Продал {item_data['emoji']} {item_data['name']} x{sell_amount} за {total_profit} 💷"
+    )
+
     success_text = (
         "✅ СДЕЛКА СОВЕРШЕНА!\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -300,6 +328,13 @@ async def sellfinal_yes(call: types.CallbackQuery, pool):
         f"⚖️ Объем: {sell_amount} шт.\n"
         f"📈 Курс: {current_price} 💷/шт.\n\n"
         f"💰 Получено: +{total_profit} 💷\n"
+        f"⭐ Опыт: +{sold_xp} XP\n"
+    )
+
+    if xp_result and xp_result.get("leveled_up"):
+        success_text += f"🎉 Новый уровень: {xp_result['new_level']}\n"
+
+    success_text += (
         "━━━━━━━━━━━━━━━━━━━━\n"
         "💵 Деньги доставлены в ваш амбар."
     )
