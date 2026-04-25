@@ -11,6 +11,7 @@ from handlers.ambar import router as ambar_router
 from handlers.market import router as market_router
 from handlers.help import router as help_router
 from handlers.profile import router as profile_router
+from handlers.promo import router as promo_router
 
 BOT_TOKEN = "8685862317:AAESwf50j_cQidI-UF9f1mL-fMu8AgZbnP8"
 
@@ -40,6 +41,7 @@ async def main():
     dp.include_router(ambar_router)
     dp.include_router(market_router)
     dp.include_router(help_router)
+    dp.include_router(promo_router)
 
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("🚀 Бот запущен!")

@@ -1,7 +1,7 @@
 import asyncpg
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres.opjpqdbwpwigemahybig:234o789o56oA@aws-1-eu-north-1.pooler.supabase.com:6543/postgres")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://postgres.xewnmplgscweblvnykgn:9r6tDEQp2sjvSChZ@aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
 
 
 def get_level_from_xp(xp: int) -> int:
@@ -32,9 +32,9 @@ def get_xp_progress(xp: int):
 
 
 async def create_pool():
+    # В проде лучше убрать ssl="require", если Supabase не требует
     return await asyncpg.create_pool(
         DATABASE_URL,
-        ssl="require",
         statement_cache_size=0,
         command_timeout=30,
         min_size=1,
@@ -60,7 +60,8 @@ async def db_start(pool):
             user_id BIGINT,
             item_name TEXT,
             amount INTEGER DEFAULT 0,
-            PRIMARY KEY (user_id, item_name)
+            PRIMARY KEY (user_id, item_name),
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
         );
         ''')
 
@@ -69,10 +70,38 @@ async def db_start(pool):
             user_id BIGINT PRIMARY KEY,
             status TEXT DEFAULT 'empty',
             plant_type TEXT DEFAULT 'Ничего',
-            last_watered BIGINT DEFAULT 0
+            last_watered BIGINT DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
         );
         ''')
 
+        # --- НОВЫЕ ТАБЛИЦЫ ДЛЯ ПРОМОКОДОВ ---
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                id SERIAL PRIMARY KEY,
+                code TEXT UNIQUE NOT NULL,
+                reward_type TEXT NOT NULL, -- 'currency', 'item', 'xp'
+                reward_item TEXT, -- Может быть NULL, если не 'item'
+                reward_amount INTEGER NOT NULL,
+                uses_left INTEGER NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS used_promo_codes (
+                user_id BIGINT NOT NULL,
+                promo_code_id INTEGER NOT NULL,
+                used_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, promo_code_id),
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (promo_code_id) REFERENCES promo_codes(id) ON DELETE CASCADE
+            )
+        """)
+        # ------------------------------------
+
+        # Эти ALTER TABLE можно будет убрать после первого успешного запуска
+        # Они нужны для добавления колонок в уже существующую таблицу users
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS xp INTEGER DEFAULT 0;")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER DEFAULT 1;")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_action TEXT DEFAULT 'Тишина на ферме...';")
